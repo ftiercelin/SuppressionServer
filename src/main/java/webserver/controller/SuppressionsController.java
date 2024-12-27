@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -15,6 +16,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 
@@ -27,36 +29,66 @@ public class SuppressionsController {
 	@GetMapping(
 			value={"/unauthenticated" + ENDPOINT}, 
 			produces=MediaType.APPLICATION_XML_VALUE)
-	public ResponseEntity<String> getSuppressions(@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth) {
-		LOGGER.info("Reading suppression (unauthenticated)");
-		displayAuthHeader("unauthenticated", auth);
+	public ResponseEntity<String> getSuppressions(
+			@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth,
+			@RequestHeader Map<String, String> headers,
+			@RequestParam  Optional<String> full
+			) {
+		String id = "unauthenticated";
+		if(full.isPresent())
+			displayHeaders(id, headers);
+		else 
+			displayAuthHeader(id, auth);
         return flushSuppressions();
     }
 	
+
 	@GetMapping(
 			value={"/bearer" + ENDPOINT}, 
 			produces=MediaType.APPLICATION_XML_VALUE)
-	public ResponseEntity<String> getSuppressionsBearer(@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth) {
-		return checkCredentialsAndflush("Bearer", auth);
+	public ResponseEntity<String> getSuppressionsBearer(
+			@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth,
+			@RequestHeader Map<String, String> headers,
+			@RequestParam  Optional<String> full
+			) {
+		String id = "Bearer";
+		if(full.isPresent())
+			displayHeaders(id, headers);
+		else 
+			displayAuthHeader(id, auth);
+		return checkCredentialsAndflush(HttpStatus.UNAUTHORIZED, "Bearer", auth);
     }
 	
 	@GetMapping(
 			value={"/basic" + ENDPOINT}, 
 			produces=MediaType.APPLICATION_XML_VALUE)
-	public ResponseEntity<String> getSuppressionsBasic(@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth) {
-		return checkCredentialsAndflush("Basic", auth);
+	public ResponseEntity<String> getSuppressionsBasic(
+			@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth,
+			@RequestHeader Map<String, String> headers,
+			@RequestParam  Optional<String> full
+			) {
+		String id = "Basic";
+		if(full.isPresent())
+			displayHeaders(id, headers);
+		else 
+			displayAuthHeader(id, auth);
+		return checkCredentialsAndflush(HttpStatus.UNAUTHORIZED, "Basic", auth);
     }
 	
 	@GetMapping(
 			value={"/basic302" + ENDPOINT}, 
 			produces=MediaType.APPLICATION_XML_VALUE)
-	public ResponseEntity<String> getSuppressionsBasic302(@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth) {
-		LOGGER.info("Reading suppression Basic 302 - Non Preemptive");
-		boolean authProvided = displayAuthHeader("Basic 302", auth);
-		if (!authProvided)
-			return response(toXmlError(new IOException("Authorization header not provided")),
-					getHttpHeaders("WWW-Authenticate", "Basic realm=\"hosted suppressions\""), HttpStatus.FOUND);
-		return checkCredentialsAndflush("Basic", auth);
+	public ResponseEntity<String> getSuppressionsBasic302(
+			@RequestHeader(HttpHeaders.AUTHORIZATION) Optional<String> auth,
+			@RequestHeader Map<String, String> headers,
+			@RequestParam  Optional<String> full
+			) {
+		String id = "Basic302";
+		if(full.isPresent())
+			displayHeaders(id, headers);
+		else 
+			displayAuthHeader(id, auth);
+		return checkCredentialsAndflush(HttpStatus.FOUND, "Basic", auth);
     }
 	
 	
@@ -73,13 +105,11 @@ public class SuppressionsController {
 	
 	
 	
-	private ResponseEntity<String> checkCredentialsAndflush(String auth, Optional<String> auth2) {
-		LOGGER.info("Reading suppression " + auth +" - Non Preemptive");
-		boolean authProvided = displayAuthHeader(auth, auth2);
-		if (!authProvided)
+	private ResponseEntity<String> checkCredentialsAndflush(HttpStatus status, String authType, Optional<String> auth) {
+		if (!isAuth(authType, auth)) {
 			return response(toXmlError(new IOException("Authorization header not provided")),
-					getHttpHeaders("WWW-Authenticate", auth + " realm=\"hosted suppressions\""), HttpStatus.UNAUTHORIZED);
-		
+					getHttpHeaders("WWW-Authenticate", authType + " realm=\"hosted suppressions\""), status);
+		}
 		return flushSuppressions();
 	}
 
@@ -103,11 +133,6 @@ public class SuppressionsController {
         return response(sb.toString(), getHttpHeaders(), HttpStatus.OK);
 	}
 
-	private ResponseEntity<String> response(String data, HttpHeaders httpHeaders, HttpStatus status) {
-		LOGGER.info("   > HTTP-{}", status);
-		httpHeaders.forEach((k,v) -> LOGGER.info("   > {}: {}", k, v));
-        return new ResponseEntity<>(data, httpHeaders, status);
-	}
 
 	private HttpHeaders getHttpHeaders(String key, String value) {
 		final HttpHeaders httpHeaders= getHttpHeaders();
@@ -125,18 +150,40 @@ public class SuppressionsController {
 	    return httpHeaders;
 	}
 	
+	private void displayHeaders(String id, Map<String, String> headers) {
+		LOGGER.info("Headers for {}", id);
+		headers.forEach((k, v) -> LOGGER.info("   <-- {}: {}", k, v));
+	}
+	private ResponseEntity<String> response(String data, HttpHeaders httpHeaders, HttpStatus status) {
+		LOGGER.info("   --> HTTP-{}", status);
+		for( String key : httpHeaders.keySet()) {
+			httpHeaders.get(key).forEach(value -> LOGGER.info("   --> {}: {}", key, value));
+		}
+        return new ResponseEntity<>(data, httpHeaders, status);
+	}
+
 	private boolean displayAuthHeader(String label, Optional<String> auth) {
 		if (!auth.isPresent()) {
-			LOGGER.info("< No {} header provided for {}", HttpHeaders.AUTHORIZATION, label);
+			LOGGER.info("   <-- No {} header provided for {}", HttpHeaders.AUTHORIZATION, label);
 			return false;
 		}
 		String value = auth.get();
 		if (value.isEmpty()) {
-			LOGGER.info("< Empty {} header provided for {}", HttpHeaders.AUTHORIZATION, label);
+			LOGGER.info("   <-- Empty {} header provided for {}", HttpHeaders.AUTHORIZATION, label);
 			return false;
 		}
-		LOGGER.info("< {}: {}", HttpHeaders.AUTHORIZATION, value);
+		LOGGER.info("   <-- {}: {}", HttpHeaders.AUTHORIZATION, value);
 		return true;		
+	}
+	private boolean isAuth(String authType, Optional<String> auth) {
+		if (!auth.isPresent()) {
+			return false;
+		}
+		String value = auth.get();
+		if (value.isEmpty()) {
+			return false;
+		}
+		return value.toLowerCase().startsWith(authType.toLowerCase());		
 	}
 
 }
